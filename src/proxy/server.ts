@@ -264,7 +264,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   }
 
   const pool = new TokenPool(accounts, {
-    strategy: parseAccountStrategy(process.env.CC_ROUTER_ACCOUNT_STRATEGY),
+    strategy: parseAccountStrategy(process.env.CC_ROUTER_ACCOUNT_STRATEGY) ?? "fill-first",
   });
   const pickOpenAIAccount = createOpenAIAccountPicker(openAIAccounts);
   const initialConfig = readConfig();
