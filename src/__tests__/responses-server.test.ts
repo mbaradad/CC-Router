@@ -290,3 +290,87 @@ describe("mountResponsesRoutes", () => {
     }
   });
 });
+
+describe("mountResponsesRoutes — stream:false", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const account = {
+    id: "openai-victor",
+    provider: "openai_subscription" as const,
+    accessToken: "access",
+    refreshToken: "refresh",
+    expiresAt: Date.now() + 60 * 60 * 1000,
+    enabled: true,
+  };
+
+  const sse = (...events: unknown[]) =>
+    events.map(e => `event: ${(e as { type: string }).type}\ndata: ${JSON.stringify(e)}\n\n`).join("");
+
+  async function post(upstreamBody: string, stream: boolean): Promise<{ status: number; contentType: string | null; text: string }> {
+    const app = express();
+    mountResponsesRoutes(app, {
+      getOpenAIAccount: () => account,
+      forwardOpenAI: async () =>
+        new Response(upstreamBody, { status: 200, headers: { "content-type": "text/event-stream" } }),
+    });
+    const server = createServer(app);
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port");
+    try {
+      const res = await fetch(`http://127.0.0.1:${address.port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "openai/gpt-5.5",
+          input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+          stream,
+        }),
+      });
+      return { status: res.status, contentType: res.headers.get("content-type"), text: await res.text() };
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
+    }
+  }
+
+  it("folds the upstream SSE into the final response object for stream:false clients", async () => {
+    const final = {
+      id: "resp_1",
+      status: "completed",
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
+    };
+    const res = await post(sse({ type: "response.created", response: { id: "resp_1" } }, { type: "response.completed", response: final }), false);
+
+    expect(res.status).toBe(200);
+    expect(res.contentType).toContain("application/json");
+    expect(JSON.parse(res.text)).toEqual(final);
+  });
+
+  it("rebuilds output from output_item.done events when the final event has none", async () => {
+    const item = { type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] };
+    const res = await post(
+      sse(
+        { type: "response.output_item.done", item },
+        { type: "response.completed", response: { id: "resp_2", status: "completed", output: [] } },
+      ),
+      false,
+    );
+
+    expect(JSON.parse(res.text)).toEqual({ id: "resp_2", status: "completed", output: [item] });
+  });
+
+  it("returns 502 when the stream ends without a final response event", async () => {
+    const res = await post(sse({ type: "response.created", response: { id: "resp_3" } }), false);
+
+    expect(res.status).toBe(502);
+    expect(JSON.parse(res.text).error.type).toBe("proxy_error");
+  });
+
+  it("still passes the SSE through untouched for stream:true clients", async () => {
+    const body = sse({ type: "response.completed", response: { id: "resp_4", output: [] } });
+    const res = await post(body, true);
+
+    expect(res.contentType).toContain("text/event-stream");
+    expect(res.text).toBe(body);
+  });
+});
