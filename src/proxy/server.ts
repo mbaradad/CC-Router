@@ -5,7 +5,7 @@ import { timingSafeEqual } from "crypto";
 import type { IncomingMessage } from "http";
 import type { Socket } from "net";
 import type { Request } from "express";
-import { TokenPool, EmptyPoolError } from "./token-pool.js";
+import { TokenPool, EmptyPoolError, parseAccountStrategy } from "./token-pool.js";
 import { needsRefresh, refreshAccountToken, saveAccounts, startRefreshLoop } from "./token-refresher.js";
 import { loadAccounts, loadOpenAIAccounts, saveOpenAIAccounts, accountsFileExists, readAccountsFromPath, readConfig, writeConfig, serialize, getProxyRequestTimeoutMs, migrateLegacyAccountProviders, setProviderAccountsEnabled } from "../config/manager.js";
 import { checkForUpdate, performUpdate, restartSelf } from "../utils/self-update.js";
@@ -263,7 +263,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     process.exit(1);
   }
 
-  const pool = new TokenPool(accounts);
+  const pool = new TokenPool(accounts, {
+    strategy: parseAccountStrategy(process.env.CC_ROUTER_ACCOUNT_STRATEGY),
+  });
   const pickOpenAIAccount = createOpenAIAccountPicker(openAIAccounts);
   const initialConfig = readConfig();
   const modelRouting = initialConfig.modelRouting ?? {};

@@ -102,12 +102,32 @@ export interface AccountPatch {
   weeklyLimitPercent?: number;
 }
 
+/**
+ * How getNext() picks among the available accounts.
+ *   - "round-robin" (default): rotate through them in order.
+ *   - "fill-first": keep draining an account whose 5h window is already open
+ *     (soonest reset first) so windows are staggered instead of all opening
+ *     together. When no window is open, open the account with the lowest
+ *     7-day utilization (ties keep accounts.json order).
+ */
+export type AccountStrategy = "round-robin" | "fill-first";
+
+export interface TokenPoolOptions {
+  strategy?: AccountStrategy;
+}
+
+export function parseAccountStrategy(value: string | undefined): AccountStrategy | undefined {
+  return value === "round-robin" || value === "fill-first" ? value : undefined;
+}
+
 export class TokenPool {
   private accounts: Account[];
   private currentIndex = 0;
+  private readonly strategy: AccountStrategy;
 
-  constructor(accounts: Account[]) {
+  constructor(accounts: Account[], opts: TokenPoolOptions = {}) {
     this.accounts = accounts;
+    this.strategy = opts.strategy ?? "round-robin";
   }
 
   /**
@@ -171,11 +191,29 @@ export class TokenPool {
       return fallback;
     }
 
-    const account = available[this.currentIndex % available.length];
-    this.currentIndex = (this.currentIndex + 1) % available.length;
+    const account = this.strategy === "fill-first"
+      ? this.pickFillFirst(available)
+      : this.pickRoundRobin(available);
     account.requestCount++;
     account.lastUsed = Date.now();
     return account;
+  }
+
+  private pickRoundRobin(available: Account[]): Account {
+    const account = available[this.currentIndex % available.length];
+    this.currentIndex = (this.currentIndex + 1) % available.length;
+    return account;
+  }
+
+  private pickFillFirst(available: Account[]): Account {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const isOpen = (a: Account) => a.rateLimits.fiveHourUtil > 0 && a.rateLimits.fiveHourReset > nowSec;
+    const open = available.filter(isOpen);
+    if (open.length > 0) {
+      return open.reduce((best, a) => a.rateLimits.fiveHourReset < best.rateLimits.fiveHourReset ? a : best);
+    }
+    // strict < keeps accounts.json order on ties
+    return available.reduce((best, a) => a.rateLimits.sevenDayUtil < best.rateLimits.sevenDayUtil ? a : best);
   }
 
   /** Optional listener fired when a request is routed to a capped account

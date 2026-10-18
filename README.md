@@ -721,3 +721,10 @@ Bug reports → [GitHub Issues](https://github.com/VictorMinemu/CC-Router/issues
 ## License
 
 [MIT](LICENSE)
+
+### Account selection strategy
+
+By default accounts are used round-robin. Set `CC_ROUTER_ACCOUNT_STRATEGY=fill-first`
+to keep draining the account whose 5-hour window is already open (soonest reset
+first), so windows are staggered instead of all opening together. When no window
+is open, the account with the lowest 7-day utilization is opened first.

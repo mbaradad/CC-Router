@@ -409,3 +409,51 @@ describe("TokenPool — user caps", () => {
     expect(bypassed!.id).toBe("a");
   });
 });
+
+describe("TokenPool — fill-first strategy", () => {
+  const nowSec = () => Math.floor(Date.now() / 1000);
+  const withWindow = (a: Account, fiveHourUtil: number, resetInSec: number, sevenDayUtil = 0): Account => {
+    a.rateLimits = { ...a.rateLimits, fiveHourUtil, fiveHourReset: nowSec() + resetInSec, sevenDayUtil };
+    return a;
+  };
+
+  it("defaults to round-robin when no strategy is given", () => {
+    const pool = new TokenPool([makeAccount("a"), makeAccount("b")]);
+    expect([pool.getNext().id, pool.getNext().id]).toEqual(["a", "b"]);
+  });
+
+  it("keeps draining the account whose 5h window is already open", () => {
+    const pool = new TokenPool(
+      [makeAccount("a"), withWindow(makeAccount("b"), 0.2, 3600)],
+      { strategy: "fill-first" },
+    );
+    expect(Array.from({ length: 3 }, () => pool.getNext().id)).toEqual(["b", "b", "b"]);
+  });
+
+  it("prefers the open window that resets soonest", () => {
+    const pool = new TokenPool(
+      [withWindow(makeAccount("a"), 0.1, 7200), withWindow(makeAccount("b"), 0.5, 600)],
+      { strategy: "fill-first" },
+    );
+    expect(pool.getNext().id).toBe("b");
+  });
+
+  it("opens the account with the lowest 7d utilization when no window is open", () => {
+    const pool = new TokenPool(
+      [withWindow(makeAccount("a"), 0, 0, 0.3), withWindow(makeAccount("b"), 0, 0, 0.1)],
+      { strategy: "fill-first" },
+    );
+    expect(pool.getNext().id).toBe("b");
+  });
+
+  it("breaks 7d ties by accounts.json order", () => {
+    const pool = new TokenPool([makeAccount("a"), makeAccount("b")], { strategy: "fill-first" });
+    expect(pool.getNext().id).toBe("a");
+  });
+
+  it("skips a busy account even if its window is open", () => {
+    const busy = withWindow(makeAccount("a", true, true), 0.2, 3600);
+    const pool = new TokenPool([busy, makeAccount("b")], { strategy: "fill-first" });
+    expect(pool.getNext().id).toBe("b");
+  });
+});
